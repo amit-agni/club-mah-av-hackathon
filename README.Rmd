@@ -11,13 +11,11 @@ output:
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-https://discuss.analyticsvidhya.com/t/3rd-place-solution-club-mahindra-dataolympics/80519/11
-
 
 This is a quick summary for the 
-[Club Mahindra Data Competition](https://datahack.analyticsvidhya.com/contest/club-mahindra-dataolympics/) that was hosted by Analytics Vidhya between 3-5May 2019
+[Club Mahindra Data Competition](https://datahack.analyticsvidhya.com/contest/club-mahindra-dataolympics/) that was hosted by Analytics Vidhya between 3-5May 2019. The objective was to predict the average spend of hotel guests on Food and Beverages
 
-* My best score (RMSE) was 96.68 with a private leaderboard  rank of 220 out of 983
+* My best score (RMSE) was 96.68 with a private leaderboard rank of 220 out of 983
 
 ### Journey
 
@@ -52,6 +50,9 @@ This is a quick summary for the
     
 * [LB Rank 2 solution]
 (https://github.com/bishwarup307/AV_ClubMahindra)
+
+https://discuss.analyticsvidhya.com/t/3rd-place-solution-club-mahindra-dataolympics/80519/11
+
 
 
 
