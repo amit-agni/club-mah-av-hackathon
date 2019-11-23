@@ -1,0 +1,852 @@
+---
+title: "Initial"
+author: "Amit Agni"
+date: "03/05/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, rows.print = 20)
+
+if(!require(pacman,quietly = TRUE)) { install.packages("pacman"); library(pacman) }
+p_load(caret,data.table,dplyr,lubridate,here,DataExplorer,tidyverse,googledrive,xgboost,DiagrammeR,rBayesianOptimization,GA)
+options(scipen=999) #remove scientific notation in printing 
+
+
+####### parallel on windows #######
+p_load(doParallel)
+cl <- makeCluster(detectCores(), type='PSOCK')
+#registerDoParallel(1)
+registerDoParallel(cl)
+
+# turn parallel processing off and run sequentially again:
+# registerDoSEQ()
+
+#####################################
+# parallel::detectCores()
+# 
+# p_load(doMC)
+# 
+# registerDoMC(cores = 4)
+# 
+# dribble <- drive_find(pattern="train.csv")
+# drive_download(as_dribble(dribble),overwrite = TRUE)
+# 
+# dribble <- drive_find(pattern="test.csv")
+# drive_download(as_dribble(dribble),overwrite = TRUE)
+# 
+# DT_train <- fread(here::here("train.csv"))
+# DT_test <- fread(here::here("test.csv"))
+#####################################
+
+
+DT_train <- fread(here::here("100_data_raw-input","train.csv"))
+DT_test <- fread(here::here("100_data_raw-input","test.csv"))
+DT_train$flag <- "train"
+DT_test$flag <- "test"
+DT_test$amount_spent_per_room_night_scaled <- 0
+
+DT <- rbind(DT_train,DT_test)
+#rm(DT_train)
+#rm(DT_test)
+
+#Date fields
+vars <- c("booking_date","checkin_date","checkout_date")
+DT[,(vars) := lapply(.SD,dmy), .SDcols = vars]
+
+#Convert to factors
+vars <- c("channel_code","main_product_code","persontravellingid",
+          "resort_region_code","resort_type_code","room_type_booked_code",
+          "state_code_resort","booking_type_code")
+DT[,(vars) := lapply(.SD,as.factor), .SDcols = vars]
+
+
+```
+
+
+
+
+### Feat Eng
+
+```{r}
+
+
+#Fixing outliers
+DT[, `:=`(booking_date = if_else(booking_date > checkin_date ,checkin_date , booking_date),
+          booking_date_outlier = as.factor(if_else(booking_date > checkin_date ,1 , 0)))]
+
+DT[, `:=`(roomnights = ifelse(roomnights < 0, 1,roomnights),
+          roomnights_outlier = as.factor(ifelse(roomnights < 0, 1,0)))]
+
+DT[, total_pax_outlier1 := as.factor(case_when(
+          total_pax == numberofadults + numberofchildren ~ 0,
+          total_pax > numberofadults + numberofchildren ~ 1,
+          total_pax < numberofadults + numberofchildren ~ -1,
+          TRUE ~ 777))]
+
+DT[, total_pax_outlier2 := as.factor(case_when(
+          total_pax == numberofadults  ~ 0,
+          total_pax > numberofadults  ~ 1,
+          total_pax < numberofadults  ~ -1,
+          TRUE ~ 777))]
+
+
+# Fixing missing values
+DT[which(complete.cases(DT)== FALSE)]
+vars <- c("season_holidayed_code","state_code_residence")
+
+prop.table(table(DT$state_code_residence))
+DT[, `:=`(state_code_residence = ifelse(is.na(state_code_residence),8,state_code_residence),
+          state_code_residence_outlier = ifelse(is.na(state_code_residence),1,0))]
+
+prop.table(table(DT$season_holidayed_code))
+DT[, `:=`(season_holidayed_code = ifelse(is.na(season_holidayed_code),2,season_holidayed_code),
+          season_holidayed_code_outlier = ifelse(is.na(season_holidayed_code),1,0))]
+
+DT[which(complete.cases(DT)== FALSE)]
+
+
+
+
+#Date features
+
+vars <- c("booking_date","checkin_date")
+vars_temp <- paste0(vars,"_year")
+DT[,(vars_temp) := lapply(.SD, function(x) as.factor(year(x)))
+   , .SDcols = vars]
+
+vars_temp <- paste0(vars,"_month")
+DT[,(vars_temp) := lapply(.SD, function(x) as.factor(month(x)))
+   , .SDcols = vars]
+
+vars_temp <- paste0(vars,"_week_of_year")
+DT[,(vars_temp) := lapply(.SD, function(x) as.factor(week(x)))
+   , .SDcols = vars]
+
+vars_temp <- paste0(vars,"_bom")
+DT[,(vars_temp) := lapply(.SD, function(x) as.factor(
+  if_else(day(x) == 1,1,0)))
+   , .SDcols = vars]
+
+vars_temp <- paste0(vars,"_eom")
+DT[,(vars_temp) := lapply(.SD, function(x) as.factor(
+  if_else(ceiling_date(x, "month") - days(1) == x,1,0)))
+   , .SDcols = vars]
+
+
+vars_temp <- paste0(vars,"_dow")
+DT[,(vars_temp) := lapply(.SD
+                          ,function(x) as.factor(wday(x,week_start = 1)))
+   , .SDcols = vars]
+
+vars_temp <- paste0(vars,"_dow_type")
+DT[,(vars_temp) := lapply(.SD, function(x) as.factor(
+   if_else(wday(x,week_start = 1) %in% c(6,7), 'WE','WD')))
+   , .SDcols = vars]
+
+
+DT[,length_of_stay := as.double(checkout_date - checkin_date)]
+DT[,lead_time := as.double(checkin_date - booking_date)]
+
+DT[,no_of_rooms := ifelse(roomnights == 0, length_of_stay 
+                           , round(roomnights/length_of_stay,0) )]
+
+
+
+```
+
+
+### Functions
+```{r}
+
+
+fn_agg_3 <- function(DT,keycols_list,FUNs,measure_col) {
+  for(i in keycols_list) {
+    for(j in FUNs) {
+      new_col_name <- paste0(paste0(unlist(i),collapse  ="_"),"_",eval(j))
+      measure <- paste0(eval(j),"(",eval(measure_col),")")
+      print(measure)
+      DT[,(new_col_name) := eval(..measure), by = i]
+    }
+    print(i)
+  }
+}
+
+
+
+
+```
+
+
+
+### Aggregation
+```{r}
+
+ST <- Sys.time()
+
+member_list <- list(
+  c("flag","memberid","channel_code")
+  ,c("flag","memberid","main_product_code")
+  ,c("flag","memberid","persontravellingid")
+  ,c("flag","memberid","resort_region_code")
+  ,c("flag","memberid","resort_type_code")
+  ,c("flag","memberid","room_type_booked_code")
+  ,c("flag","memberid","season_holidayed_code")
+  ,c("flag","memberid","state_code_residence")
+  ,c("flag","memberid","state_code_resort")
+  #,c("flag","memberid","booking_type_code")
+  #,c("flag","memberid","cluster_code")
+  #,c("flag","memberid","reservationstatusid_code")
+  ,c("flag","memberid","resort_id")
+  
+  
+  ,c("flag","memberid","checkin_date_year")
+  ,c("flag","memberid","checkin_date_month")
+  ,c("flag","memberid","checkin_date_week_of_year")
+
+  ,c("flag","memberid","checkin_date_bom")
+  ,c("flag","memberid","checkin_date_eom")
+  ,c("flag","memberid","checkin_date_dow")
+  ,c("flag","memberid","checkin_date_dow_type")
+  
+  ,c("flag","memberid","booking_date_year")
+  ,c("flag","memberid","booking_date_month")
+  ,c("flag","memberid","booking_date_week_of_year")
+
+  ,c("flag","memberid","booking_date_bom")
+  ,c("flag","memberid","booking_date_eom")
+  ,c("flag","memberid","booking_date_dow")
+  ,c("flag","memberid","booking_date_dow_type")
+  
+  #,c("flag","memberid","no_of_rooms")
+)
+
+p_load(psych)
+fn_agg_3(DT,member_list,c("sum","mean","median","min","max","var"),"roomnights") 
+fn_agg_3(DT,member_list,c("sum","mean","median","min","max","var"),"length_of_stay") 
+fn_agg_3(DT,member_list,c("mean","median","min","max","var"),"lead_time") 
+
+fn_agg_3(DT,member_list,c("length"),"reservation_id")
+
+
+
+
+resort_list <- list(
+  c("flag","resort_id","channel_code")
+  ,c("flag","resort_id","main_product_code")
+  ,c("flag","resort_id","persontravellingid")
+  # ,c("flag","resort_id","resort_region_code")
+  # ,c("flag","resort_id","resort_type_code")
+  # ,c("flag","resort_id","room_type_booked_code")
+  ,c("flag","resort_id","season_holidayed_code")
+  ,c("flag","resort_id","state_code_residence")
+  ,c("flag","resort_id","state_code_resort")
+  #,c("flag","resort_id","booking_type_code")
+  # ,c("flag","resort_id","cluster_code")
+  #,c("flag","resort_id","reservationstatusid_code")
+  #,c("flag","resort_id","memberid")
+  
+  
+  ,c("flag","resort_id","checkin_date_year")
+  ,c("flag","resort_id","checkin_date_month")
+  ,c("flag","resort_id","checkin_date_week_of_year")
+
+  ,c("flag","resort_id","checkin_date_bom")
+  ,c("flag","resort_id","checkin_date_eom")
+  ,c("flag","resort_id","checkin_date_dow")
+  ,c("flag","resort_id","checkin_date_dow_type")
+  
+  ,c("flag","resort_id","booking_date_year")
+  ,c("flag","resort_id","booking_date_month")
+  ,c("flag","resort_id","booking_date_week_of_year")
+
+  ,c("flag","resort_id","booking_date_bom")
+  ,c("flag","resort_id","booking_date_eom")
+  ,c("flag","resort_id","booking_date_dow")
+  ,c("flag","resort_id","booking_date_dow_type")
+  
+  #,c("flag","resort_id","no_of_rooms")
+)
+
+
+fn_agg_3(DT,resort_list,c("sum","mean","median","min","max","var"),"roomnights") 
+fn_agg_3(DT,resort_list,c("mean","median","min","max","var"),"length_of_stay") 
+fn_agg_3(DT,resort_list,c("mean","median","min","max","var"),"lead_time") 
+
+
+fn_agg_3(DT,resort_list,c("length"),"reservation_id")
+
+
+ST
+Sys.time()
+
+# [1] "2019-05-12 19:14:07 AEST"
+# [1] "2019-05-12 21:12:07 AEST"
+# 2hrs
+
+
+# [1] "2019-05-13 18:27:24 AEST"
+# [1] "2019-05-13 20:11:38 AEST"
+# 1hr 45mins
+
+  
+
+## using fn_agg_3
+# [1] "2019-05-17 08:40:26 AEST"
+# [1] "2019-05-17 09:27:04 AEST"
+#much faster : 45mins
+
+```
+
+
+
+```{r}
+
+
+####### Aggregates ###
+
+############## Group by Number of bookings per year ############
+
+vars <- c("main_product_code"
+          ,"room_type_booked_code","resort_type_code","cluster_code"
+          ,"resort_id"
+          ,"checkin_date_year","checkin_date_month","checkin_date_dow"
+          ,"state_code_residence","persontravellingid"
+          ,"member_age_buckets","season_holidayed_code")
+
+for(i in vars) {
+    temp <- c("flag",eval(i))
+    
+    DT[flag == "train",
+    paste0(i,"_groupby")  := length(reservation_id),
+    by = temp]
+    
+    DT[flag == "test",
+    paste0(i,"_groupby")  := length(reservation_id),
+    by = temp]
+}
+
+
+
+
+########### Total Pax outlier exploration ########
+DT[,tot_pax_var1 := total_pax - (numberofadults + numberofchildren) ]
+
+DT[,tot_pax_var2 := total_pax - numberofadults  ]
+
+vars <- c("channel_code","booking_type_code","main_product_code"
+          ,"room_type_booked_code","resort_type_code","cluster_code"
+          ,"resort_id","reservationstatusid_code"
+          ,"persontravellingid"
+          ,"checkin_date_year","checkin_date_month","checkin_date_dow"
+          ,"member_age_buckets","season_holidayed_code")
+
+
+for(i in vars) {
+    temp <- c("flag",eval(i),"tot_pax_var1")
+    
+    DT[flag == "train",
+    paste0(i,"_tot_pax_var1")  := length(reservation_id),
+    by = temp]
+    
+    DT[flag == "test",
+    paste0(i,"_tot_pax_var1")  := length(reservation_id),
+    by = temp]
+}
+
+
+for(i in vars) {
+    temp <- c("flag",eval(i),"tot_pax_var2")
+    
+    DT[flag == "train",
+    paste0(i,"_tot_pax_var2")  := length(reservation_id),
+    by = temp]
+    
+    DT[flag == "test",
+    paste0(i,"_tot_pax_var2")  := length(reservation_id),
+    by = temp]
+}
+
+
+
+
+
+############## Top important feature changed to factor!!!! ############
+############# Length of Stay interactions ##################
+
+#DT$length_of_stay_new <- DT$length_of_stay
+
+group_category(data = DT, feature = "length_of_stay", threshold = 0.001,update = TRUE)
+
+vars <- c("booking_type_code","main_product_code"
+          ,"room_type_booked_code","resort_type_code","cluster_code"
+          ,"resort_id"
+          ,"checkin_date_year","checkin_date_month","checkin_date_dow"
+          ,"state_code_residence","persontravellingid"
+          ,"member_age_buckets","season_holidayed_code")
+
+
+for(i in vars) {
+    temp <- c("flag",eval(i),"length_of_stay")
+    
+    DT[flag == "train",
+    paste0(i,"_length_of_stay")  := length(reservation_id),
+    by = temp]
+    
+    DT[flag == "test",
+    paste0(i,"_length_of_stay")  := length(reservation_id),
+    by = temp]
+}
+
+
+############## Second important feature changed to factor!!!! ############
+############# No of rooms interactions ##################
+
+group_category(data = DT, feature = "no_of_rooms", threshold = 0.001, update = TRUE)
+
+vars <- c("booking_type_code","main_product_code"
+          ,"room_type_booked_code","resort_type_code","cluster_code"
+          ,"resort_id"
+          ,"checkin_date_year","checkin_date_month","checkin_date_dow"
+          ,"state_code_residence","persontravellingid"
+          ,"member_age_buckets","season_holidayed_code")
+
+for(i in vars) {
+    temp <- c("flag",eval(i),"no_of_rooms")
+    
+    DT[flag == "train",
+    paste0(i,"_no_of_rooms")  := length(reservation_id),
+    by = temp]
+    
+    DT[flag == "test",
+    paste0(i,"_no_of_rooms")  := length(reservation_id),
+    by = temp]
+}
+
+
+
+
+
+
+  
+
+```
+
+
+
+
+```{r}
+
+
+# Binning
+group_category(data = DT, feature = "numberofadults", threshold = 0.001,update = TRUE)
+group_category(data = DT, feature = "numberofchildren", threshold = 0.001,update = TRUE)
+group_category(data = DT, feature = "total_pax", threshold = 0.001,update = TRUE)
+
+
+
+
+#housekeeping
+DT$reservation_id <- NULL
+DT$memberid <- NULL
+
+vars <- names(which(lapply(DT,is.character)==TRUE))
+DT[,(vars) := lapply(.SD,as.factor), .SDcols = vars]
+
+vars <- c("booking_date","checkin_date","checkout_date")
+DT[,(vars) := NULL]
+
+vars <- c("season_holidayed_code","state_code_residence")
+DT[,(vars) := lapply(.SD,as.factor), .SDcols = vars]
+
+
+vars <- grep("outlier",names(DT),value = TRUE)
+DT[,(vars) := lapply(.SD,as.factor), .SDcols = vars]
+
+
+
+############# Scale the numerical values #################
+vars <- names(which(lapply(DT,is.numeric)==TRUE))
+vars <- vars[!vars == "amount_spent_per_room_night_scaled"]
+DT[,(vars) := lapply(.SD,scale), .SDcols = vars]
+
+
+glimpse(DT)
+
+```
+
+### Model Data Prep
+```{r}
+
+
+vars <- grep("mode",names(DT),value = TRUE)
+vars <- names(DT)[which(!names(DT) %in% vars)]
+
+DT <- DT[,(vars), with = FALSE]
+
+DT_bkup <- copy(DT)
+
+```
+
+
+```{r}
+
+p_load(vtreat)
+p_load(magrittr)
+
+vars <- names(DT)
+vars <- vars[!vars %in% c("flag"
+                          ,"amount_spent_per_room_night_scaled")]
+
+
+my_train_labels_before_everything <- DT[flag =="train"]$amount_spent_per_room_night_scaled
+
+# Create the treatment plan for train data
+treatplan <- designTreatmentsZ(DT[flag == "train"]
+                               , vars
+                               , verbose = TRUE)
+#summary(treatplan)
+
+# Get the "clean" and "lev" variables from the scoreFrame
+temp <- data.table(treatplan$scoreFrame)
+newvars <- temp[code %in% c("clean","lev")]$varName
+
+# Prepare the training data
+train.treat <- prepare(treatplan, DT[flag == "train",]
+                       ,  varRestriction = newvars)
+
+# Prepare the test data
+test.treat <- prepare(treatplan, DT[flag =="test",]
+                      ,  varRestriction = newvars)
+
+str(train.treat)
+
+DT <- cbind(train.treat,amount_spent_per_room_night_scaled = my_train_labels_before_everything)
+
+```
+
+```{r}
+
+#DT <- DT[flag == "train",]
+
+index <- createDataPartition(y=DT$amount_spent_per_room_night_scaled, p=0.8
+                             , list=FALSE) 
+my_train <- DT[index,]
+my_test <- DT[-index,]
+
+
+my_train_labels <- my_train$amount_spent_per_room_night_scaled
+my_train$amount_spent_per_room_night_scaled <- NULL
+
+my_test_labels <- my_test$amount_spent_per_room_night_scaled
+my_test$amount_spent_per_room_night_scaled <- NULL
+
+dummies <- dummyVars(~., data = my_train, fullRank = TRUE)
+my_train <- predict(dummies, newdata = my_train)
+
+dummies <- dummyVars(~., data = my_test,fullRank = TRUE)
+my_test <- predict(dummies, newdata = my_test)
+
+
+my_train <- xgb.DMatrix(my_train, label = my_train_labels)
+my_test <- xgb.DMatrix(my_test, label = my_test_labels)
+
+
+saveRDS(my_train,here("110_data_intermediate","my_train.Rds"))
+saveRDS(my_test,here("110_data_intermediate","my_test.Rds"))
+
+
+# my_train <- readRDS(here("110_data_intermediate","my_train.Rds"))
+# my_test <- readRDS(here("110_data_intermediate","my_test.Rds"))
+
+watchlist <- list(train = my_train, test = my_test)
+
+
+```
+
+
+
+```{r}
+xgb_model <- xgb.train(params = 
+                             list(
+                                max_depth = 5
+                                ,gamma = 3.6674
+                                ,min_child_weight = 5000
+                                ,subsample = 0.9
+                                ,colsample_bytree = 0.1
+       
+                             )
+                           ,data = my_train
+                           ,watchlist = watchlist
+                           ,nrounds = 1000
+                           ,eta = 0.2
+                           ,early_stopping_rounds = 5
+                           ,print_every_n = 5
+                           ,verbose = TRUE) 
+
+ggplot(melt(xgb_model$evaluation_log,
+       measure.vars = c("train_rmse","test_rmse"))) +
+    geom_line(aes(x=iter, y=value, color=variable)) +
+    scale_y_continuous(limits = c(0.96,1))  
+
+
+```
+
+  
+  
+
+
+```{r eval = FALSE, echo = FALSE}
+
+# TODO : modularise below code
+#min_child_weight <- c(1,5,10,50,100,200,300,400,500,1000,2000,3000,4000,5000,6000,7000,8000,9000,1000)
+#gamma <- c(1,2,3,4,5,6,7,8,10,50,100,500)
+#colsample_bytree <- c(0.01,0.05,0.1,0.2,0.3,0.35,0.4,0.5,0.6,0.7,0.8,0.9,1)
+#subsample <- c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1)
+#alpha <- c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1)
+#lambda <- c(0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1)
+#early_stopping_rounds <- c(2,3,4,5,6,7,8,9,10,20)
+max_depth <- c(2,3,4,5,6,7,8,9,10)
+
+# rm(dummies)
+# rm(index)
+# rm(DT_bkup2)
+# rm(treatplan)
+# rm(DT_test)
+# rm(DT_train)
+gc()
+names(DT)
+#eta <- c(0.001,0.005,0.01,0.05,0.1,0.2,0.3,0.4,0.5)
+
+hyper_grid <- expand.grid(max_depth = max_depth)
+
+best <- list()
+plots <- list()
+importances <- list()
+
+for(i in 1:nrow(hyper_grid)){
+    xgb_model <- xgb.train(params = 
+                             list(
+                                max_depth = hyper_grid$max_depth[i]
+                                ,gamma = 2
+                                ,min_child_weight = 895
+                                ,subsample = 0.9
+                                ,colsample_bytree = 0.1
+                                ,alpha = 0.1
+                                ,lambda = 0.9
+                                                       
+                             )
+                           ,data = my_train
+                           ,watchlist = watchlist
+                           ,nrounds = 5000
+                           ,eta = 0.1
+                           ,early_stopping_rounds =  5
+                           ,verbose = TRUE) 
+
+    best[[i]] <- c(best_iteration = xgb_model$best_iteration
+                   ,best_ntreelimit = xgb_model$best_ntreelimit
+                   ,best_score = xgb_model$best_score)
+
+    plots[[i]]  <- cbind(srno = i
+                        ,parameter = xgb_model$params$max_depth
+                        #  ,parameter = xgb_model$call$early_stopping_rounds
+                            #,parameter = hyper_grid$eta[i] 
+                         ,best_iter = xgb_model$best_iteration
+                         ,best_train = xgb_model$evaluation_log[xgb_model$best_iteration]$train_rmse
+                         ,best_test= xgb_model$evaluation_log[xgb_model$best_iteration]$test_rmse
+                         ,xgb_model$evaluation_log)
+    
+    importances[[i]] <- xgb.importance(model = xgb_model)
+}
+
+beep(1)
+
+temp <- rbindlist(plots)
+#temp[,max_depth := factor(paste0("max depth ",max_depth), levels = unique(temp$max_depth))]
+
+data_labels <- temp[,.(label = paste0("Best iter: ",best_iter
+                                      ," train: ",round(best_train,4)
+                                      ," test: ",round(best_test,4))),
+                    by = .(parameter,srno,best_iter,best_train,best_test)]
+
+ggplot(melt(temp[,.(iter,parameter,train_rmse,test_rmse)]
+            ,measure.vars = c("train_rmse","test_rmse"))) +
+  geom_line(aes(x=iter, y=value, color=variable)) +
+  scale_y_continuous(limits = c(0.94,0.98))  +
+  geom_text(data = data_labels,
+            mapping = aes(x = -Inf, y = -Inf, label = label)
+            ,hjust   = -0.05,  vjust   = -0.5, size = 4) +
+  facet_wrap(~parameter, scales = "free") +
+  labs(title = "Impact of changing eta",
+       subtitle = "min_child_weight = 895,max_depth = 7,subsample = 0.9,colsample_bytree = 0.1,gamma = 2, alpha=0.1, lambda = 0.9")
+
+
+```
+
+
+### Hyperparameter Tuning - Bayesian Optimisation with XGB
+
+STRATEGY
+Steps :
+1. Choose a relatively high learning rate (Somewhere between 0.05 to 0.3)
+2. Determine the optimum number of trees for this learning rate
+3. Tune tree-specific parameters ( max_depth, min_child_weight, gamma, subsample, colsample_bytree) 
+4. Tune regularization parameters (lambda, alpha) - reduce model complexity and enhance performance.
+5. Lower the learning rate and decide the optimal parameters 
+
+
+RESULTS
+
+* Benchmark Parameters and without fn_agg()
+  + eta = 0.2,max_depth=5,gamma = 3.6674,subsample = 0.8,colsample_bytree = 0.8
+  + Stopping. Best iteration: [156]	train-rmse:0.945597	test-rmse:0.973998
+        
+* Above paramters and some fn_agg() additional features
+  + Stopping. Best iteration: [110]	train-rmse:0.949664	test-rmse:0.967398
+
+* Reducing eta from 0.2 to 0.1
+  + did not reduce RMSE but increased no of rounds needed to converge
+  + Stopping. Best iteration: [468]	train-rmse:0.928852	test-rmse:0.966362
+  
+* Increasing the features to 315
+  + Same hyperparameters as prev
+  + did not improve RMSE
+  + Stopping. Best iteration:[196]	train-rmse:0.930510	test-rmse:0.970588
+  
+* With 315 features, 10hours of Bayesian optimisation of 100 rounds gave  
+  + Best Parameters Found:  Round = 75	max_depth = 3.0000	gamma = 11.0580	min_child_weight = 8.2212	subsample = 0.8000	colsample_bytree = 0.7993	Value = -0.9705
+  + RMSE of 0.9705 was not any improvement
+  
+* Conclusion
+  + Gross addition of features doesnt improve performance
+  
+  
+13may19
+Round = 16	max_depth = 7.0000	gamma = 2.0000	min_child_weight = 895.0000	subsample = 1.0000	colsample_bytree = 0.3659	Value = -0.9670 
+
+
+```{r}
+
+# Test has to be second in the list else, XGB uses train metric for early stopping
+watchlist <- list(train = my_train,test = my_test)
+
+opt_fn <- function(max_depth,gamma,min_child_weight,subsample,colsample_bytree) {
+
+    xgb_model <- xgb.train(
+        params = list(
+                 booster = "gbtree"
+                ,objective = "reg:linear"
+                ,eval_metric = "rmse"
+            ,eta = 0.2
+            ,max_depth= max_depth
+            ,gamma = gamma
+            ,min_child_weight = min_child_weight
+            ,subsample = subsample
+            ,colsample_bytree = colsample_bytree
+            )
+    ,data = my_train
+    ,watchlist = watchlist
+    ,nrounds = 2000
+    ,early_stopping_rounds = 5
+    ,verbose = 2
+    ,print_every_n = 5
+    ,prediction = TRUE) 
+    
+    print(paste0("Best iteration = ",xgb_model$best_iteration))
+  
+    list(
+        Score = -xgb_model$evaluation_log[xgb_model$best_iteration]$test_rmse
+        ,Pred = xgb_model$pred)
+}
+
+
+
+opt_res <- BayesianOptimization(opt_fn
+                                ,bounds = list(
+                                    max_depth = c(3L,10L)
+                                    ,gamma = c(0L,5L)
+                                    ,min_child_weight = c(500L,1000L)            
+                                    ,subsample = c(0.8,1)
+                                    ,colsample_bytree = c(0.05,0.5)
+                                    )
+                                ,init_grid_dt = NULL
+                                ,init_points = 10
+                                ,n_iter = 100
+                                ,acq = "ucb"
+                                ,kappa = 2.576
+                                ,eps = 0.0
+                                ,verbose = TRUE)
+
+```
+
+
+
+### Re-evaluate the best itin on my_test
+
+```{r}
+xgb_model <- xgb.train(
+    params = list(
+             booster = "gbtree"
+            ,objective = "reg:linear"
+            ,eval_metric = "rmse"
+        ,eta = 0.2
+        ,max_depth=5
+        ,gamma = 3.6674
+        #,min_child_weight = 1
+        ,subsample = 0.8
+        ,colsample_bytree = 0.8
+        )
+,data = my_train
+,watchlist = watchlist
+,nrounds = 2000
+,early_stopping_rounds = 20
+,verbose = TRUE
+,prediction = TRUE) 
+
+xgb_model$evaluation_log
+
+# Learning Curve
+ggplot(melt(xgb_model$evaluation_log,id.vars = "iter")) +
+    geom_line(aes(x=iter, y=value, color=variable)) +
+  scale_y_continuous(limits = c(0.94,1))
+
+importance <- xgb.importance(model = xgb_model)
+importance
+xgb.plot.importance(importance)
+
+importance[1:30]$Feature
+
+# Other XGB plots [TO BE REVIEWED]
+#xgb.plot.multi.trees(model = xgb_model)
+#xgb.plot.deepness(model=xgb_model)
+#xgb.plot.shap()
+xgb_model$best_iteration
+xgb.plot.tree(model=xgb_model,trees = 75, plot_height = 2000)
+p_load(DiagrammeR)
+p_load(DiagrammeRsvg)
+p_load(rsvg)
+
+export_graph(graph = xgb.plot.tree(model=xgb_model,trees = 127,render=FALSE)
+             ,file_name = here::here('230_src_RMD-and-output','tree.pdf'), width=1500, height=1900)
+
+
+
+# Feature contributions [HOW CAN THIS BE USED]
+#pred <- predict(xgb_model,newdata = my_test ,predcontrib = TRUE)
+
+
+
+#Find linear combinations or correlated variables and remove from data
+if(!require(caret,quietly = TRUE)) { install.packages("caret"); library(caret)}
+mtcars$wt_new <- mtcars$wt * 2
+#NAs gives error
+lincomb <- findLinearCombos(mtcars[complete.cases(mtcars),])
+lincomb$linearCombos[[1]]
+colnames(mtcars)[lincomb$linearCombos[[1]]]
+mtcars[-lincomb$remove]
+
+
+```
+
+
+

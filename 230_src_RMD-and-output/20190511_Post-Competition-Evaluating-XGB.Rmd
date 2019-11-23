@@ -1,0 +1,1085 @@
+---
+title: "XGB Evaluation"
+author: "Amit Agni"
+date: "03/05/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, rows.print = 20)
+
+if(!require(pacman,quietly = TRUE)) { install.packages("pacman"); library(pacman) }
+p_load(caret,data.table,dplyr,lubridate,here,DataExplorer,tidyverse,googledrive,xgboost,DiagrammeR,rBayesianOptimization,GA)
+options(scipen=999) #remove scientific notation in printing 
+
+
+####### parallel on windows #######
+p_load(doParallel)
+cl <- makeCluster(detectCores(), type='PSOCK')
+#registerDoParallel(1)
+registerDoParallel(cl)
+
+# turn parallel processing off and run sequentially again:
+# registerDoSEQ()
+
+#####################################
+# parallel::detectCores()
+# 
+# p_load(doMC)
+# 
+# registerDoMC(cores = 4)
+# 
+# dribble <- drive_find(pattern="train.csv")
+# drive_download(as_dribble(dribble),overwrite = TRUE)
+# 
+# dribble <- drive_find(pattern="test.csv")
+# drive_download(as_dribble(dribble),overwrite = TRUE)
+# 
+# DT_train <- fread(here::here("train.csv"))
+# DT_test <- fread(here::here("test.csv"))
+#####################################
+
+
+
+```
+
+
+### Feat Eng
+
+* Some basic feature engineering was done 
+* Creating `r 43 - 25` additional features
+* Data was not scaled
+
+```{r echo = FALSE}
+
+
+DT_train <- fread(here::here("100_data_raw-input","train.csv"))
+DT_test <- fread(here::here("100_data_raw-input","test.csv"))
+DT_train$flag <- "train"
+DT_test$flag <- "test"
+DT_test$amount_spent_per_room_night_scaled <- 0
+
+DT <- rbind(DT_train,DT_test)
+#rm(DT_train)
+#rm(DT_test)
+
+#Rename the Resort Ids
+setnames(DT,"resort_id","resort_id_old")
+temp <- data.table(resort_id_old = unique(DT$resort_id_old)
+                   ,resort_id = paste0("Rst-",seq(1,length(unique(DT$resort_id_old)),1)))
+DT <- merge(DT,temp,by="resort_id_old")
+DT[,resort_id_old := NULL]
+
+
+#Date fields
+vars <- c("booking_date","checkin_date","checkout_date")
+DT[,(vars) := lapply(.SD,dmy), .SDcols = vars]
+
+#Convert to factors
+vars <- c("channel_code","main_product_code","persontravellingid",
+          "resort_region_code","resort_type_code","room_type_booked_code",
+          "state_code_resort","booking_type_code")
+DT[,(vars) := lapply(.SD,as.factor), .SDcols = vars]
+
+
+#Fixing outliers
+DT[, `:=`(booking_date = if_else(booking_date > checkin_date ,checkin_date , booking_date),
+          booking_date_outlier = as.factor(if_else(booking_date > checkin_date ,1 , 0)))]
+
+DT[, `:=`(roomnights = ifelse(roomnights < 0, 1,roomnights),
+          roomnights_outlier = as.factor(ifelse(roomnights < 0, 1,0)))]
+
+DT[, total_pax_outlier1 := as.factor(case_when(
+          total_pax == numberofadults + numberofchildren ~ 0,
+          total_pax > numberofadults + numberofchildren ~ 1,
+          total_pax < numberofadults + numberofchildren ~ -1,
+          TRUE ~ 777))]
+
+DT[, total_pax_outlier2 := as.factor(case_when(
+          total_pax == numberofadults  ~ 0,
+          total_pax > numberofadults  ~ 1,
+          total_pax < numberofadults  ~ -1,
+          TRUE ~ 777))]
+
+
+# Fixing missing values
+#DT[which(complete.cases(DT)== FALSE)]
+vars <- c("season_holidayed_code","state_code_residence")
+
+#prop.table(table(DT$state_code_residence))
+DT[, `:=`(state_code_residence = ifelse(is.na(state_code_residence),8,state_code_residence),
+          state_code_residence_outlier = ifelse(is.na(state_code_residence),1,0))]
+
+#prop.table(table(DT$season_holidayed_code))
+DT[, `:=`(season_holidayed_code = ifelse(is.na(season_holidayed_code),2,season_holidayed_code),
+          season_holidayed_code_outlier = ifelse(is.na(season_holidayed_code),1,0))]
+
+#DT[which(complete.cases(DT)== FALSE)]
+
+
+
+
+#Date features
+
+vars <- c("booking_date","checkin_date")
+vars_temp <- paste0(vars,"_year")
+DT[,(vars_temp) := lapply(.SD, function(x) as.factor(year(x)))
+   , .SDcols = vars]
+
+vars_temp <- paste0(vars,"_month")
+DT[,(vars_temp) := lapply(.SD, function(x) as.factor(month(x)))
+   , .SDcols = vars]
+
+vars_temp <- paste0(vars,"_week_of_year")
+DT[,(vars_temp) := lapply(.SD, function(x) as.factor(week(x)))
+   , .SDcols = vars]
+
+vars_temp <- paste0(vars,"_bom")
+DT[,(vars_temp) := lapply(.SD, function(x) as.factor(
+  if_else(day(x) == 1,1,0)))
+   , .SDcols = vars]
+
+vars_temp <- paste0(vars,"_eom")
+DT[,(vars_temp) := lapply(.SD, function(x) as.factor(
+  if_else(ceiling_date(x, "month") - days(1) == x,1,0)))
+   , .SDcols = vars]
+
+
+vars_temp <- paste0(vars,"_dow")
+DT[,(vars_temp) := lapply(.SD
+                          ,function(x) as.factor(wday(x,week_start = 1)))
+   , .SDcols = vars]
+
+vars_temp <- paste0(vars,"_dow_type")
+DT[,(vars_temp) := lapply(.SD, function(x) as.factor(
+   if_else(wday(x,week_start = 1) %in% c(6,7), 'WE','WD')))
+   , .SDcols = vars]
+
+
+DT[,length_of_stay := as.double(checkout_date - checkin_date)]
+DT[,lead_time := as.double(checkin_date - booking_date)]
+
+DT[,no_of_rooms := ifelse(roomnights == 0, length_of_stay 
+                           , round(roomnights/length_of_stay,0) )]
+
+
+
+# Binning
+group_category(data = DT, feature = "numberofadults", threshold = 0.001,update = TRUE)
+group_category(data = DT, feature = "numberofchildren", threshold = 0.001,update = TRUE)
+group_category(data = DT, feature = "total_pax", threshold = 0.001,update = TRUE)
+
+
+#housekeeping
+DT$reservation_id <- NULL
+DT$memberid <- NULL
+
+vars <- names(which(lapply(DT,is.character)==TRUE))
+DT[,(vars) := lapply(.SD,as.factor), .SDcols = vars]
+
+vars <- c("booking_date","checkin_date","checkout_date")
+DT[,(vars) := NULL]
+
+vars <- c("season_holidayed_code","state_code_residence")
+DT[,(vars) := lapply(.SD,as.factor), .SDcols = vars]
+
+
+vars <- grep("outlier",names(DT),value = TRUE)
+DT[,(vars) := lapply(.SD,as.factor), .SDcols = vars]
+
+
+
+############# Scale the numerical values #################
+# vars <- names(which(lapply(DT,is.numeric)==TRUE))
+# vars <- vars[!vars == "amount_spent_per_room_night_scaled"]
+# DT[,(vars) := lapply(.SD,scale), .SDcols = vars]
+
+
+
+
+### Model Data Prep
+DT_bkup <- copy(DT)
+
+
+DT <- DT[flag == "train",]
+index <- createDataPartition(y=DT$amount_spent_per_room_night_scaled, p=0.8
+                             , list=FALSE) 
+my_train <- DT[index,]
+my_test <- DT[-index,]
+
+
+my_train_labels <- my_train$amount_spent_per_room_night_scaled
+my_train$amount_spent_per_room_night_scaled <- NULL
+
+my_test_labels <- my_test$amount_spent_per_room_night_scaled
+my_test$amount_spent_per_room_night_scaled <- NULL
+
+dummies <- dummyVars(~., data = my_train, fullRank = TRUE)
+my_train <- predict(dummies, newdata = my_train)
+
+dummies <- dummyVars(~., data = my_test,fullRank = TRUE)
+my_test <- predict(dummies, newdata = my_test)
+my_test_4xgb_explainer <- my_test
+
+
+my_train <- xgb.DMatrix(my_train, label = my_train_labels)
+my_test <- xgb.DMatrix(my_test, label = my_test_labels)
+
+watchlist <- list(train = my_train, test = my_test)
+
+
+```
+
+
+
+### Parameter tuning plots
+
+Impact of changing some key XGB features on the learning curves
+
+Some notes from XGB documentation  
+
+* Bias-Variance Tradeoff : When we allow the model to get more complicated (e.g. more depth), the model has better ability to fit the training data, resulting in a less biased model. However, such complicated model requires more data to fit.
+* Most of parameters in XGBoost are about bias variance tradeoff. 
+* The best model should trade the model complexity with its predictive power carefully.
+* There are in general two ways that you can control overfitting in XGBoost:
+  + The first way is to directly control model complexity.
+    + max_depth
+    + min_child_weight
+    + gamma
+  + The second way is to add randomness to make training robust to noise.
+    + subsample
+    + colsample_bytree.
+  + You can also reduce stepsize eta. Remember to increase num_round when you do so.
+
+* Assumption, the eta of 0.2 and nrounds were kept fixed and others parameters were modified one at a time
+
+**Results**  
+
+* Below 3 parameters needed tuning, for the rest the default seems to be okay
+  + min-child-weight
+  + colsample_bytree
+  + gamma 
+
+**Details below**
+
+
+* Default **max_depth** of 6 seems to be doing fine. Though 7 might be better
+![](`r here("300_output","20190511_Impact-of-changing-maxdepth.png")`)
+
+* **min-child-weight** default of 1 is no good. 
+  + It has a big impact on overfitting. 
+  + 500 gives good results, it will depend on the number of observations
+![](`r here("300_output","20190511_Impact-of-changing-min-child-weight.png")`)
+
+* **gamma** default is 0 (not plotted) but higher gamma gave better result
+![](`r here("300_output","20190511_Impact-of-changing-gamma.png")`)
+
+* subsample default of 1 looks ok
+![](`r here("300_output","20190511_Impact-of-changing-subsample.png")`)
+
+* **colsample_bytree** default of 1 is not good. It depends on the number of features and has to be tuned
+![](`r here("300_output","20190511_Impact-of-changing-colsample_bytree.png")`)
+
+* L1 reg parameter **alpha** |weight| default of 0 seems ok
+![](`r here("300_output","20190511_Impact-of-changing-alpha.png")`)
+
+* L2 reg parameter **lambda** $weight^{2}$ default of 1 is ok
+![](`r here("300_output","20190511_Impact-of-changing-lambda.png")`)
+
+* Lower the **early stopping** the better
+  + 10 seems to be optimal during final training
+![](`r here("300_output","20190511_Impact-of-changing-early stopping 1.png")`)
+
+* though subsequent run gave somewhat different results
+![](`r here("300_output","20190511_Impact-of-changing-early stopping 2.png")`)
+
+
+
+```{r eval = FALSE, echo = FALSE}
+
+# TODO : modularise below code
+#min_child_weight <- c(1,5,10,50,100,200,300,400,500,1000,2000,3000)
+#gamma <- c(1,2,3,4,5,6,7,8,10,50,100,500)
+#colsample_bytree <- c(0.01,0.05,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8)
+#subsample <- c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1)
+#alpha <- c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1)
+#lambda <- c(0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1)
+#early_stopping_rounds <- c(2,3,4,5,6,7,8,9,10,20)
+
+hyper_grid <- expand.grid(early_stopping_rounds = early_stopping_rounds)
+
+best <- list()
+plots <- list()
+importances <- list()
+
+for(i in 1:nrow(hyper_grid)){
+    xgb_model <- xgb.train(params = 
+                             list(
+                                max_depth = 7
+                                ,gamma = 3.6674
+                                ,min_child_weight = 500
+                                ,subsample = 0.9
+                                ,colsample_bytree = 0.1
+                                ,alpha = 0.1
+                                ,lambda = 0.9
+                                                       
+                             )
+                           ,data = my_train
+                           ,watchlist = watchlist
+                           ,nrounds = 2000
+                           ,eta = 0.2
+                           ,early_stopping_rounds = hyper_grid$early_stopping_rounds[i] 
+                           ,verbose = TRUE) 
+
+    best[[i]] <- c(best_iteration = xgb_model$best_iteration
+                   ,best_ntreelimit = xgb_model$best_ntreelimit
+                   ,best_score = xgb_model$best_score)
+
+    plots[[i]]  <- cbind(srno = i
+                        # ,parameter = xgb_model$params$lambda
+                        #  ,parameter = xgb_model$call$early_stopping_rounds
+                           ,parameter = hyper_grid$early_stopping_rounds[i] 
+                         ,best_iter = xgb_model$best_iteration
+                         ,best_train = xgb_model$evaluation_log[xgb_model$best_iteration]$train_rmse
+                         ,best_test= xgb_model$evaluation_log[xgb_model$best_iteration]$test_rmse
+                         ,xgb_model$evaluation_log)
+    
+    importances[[i]] <- xgb.importance(model = xgb_model)
+}
+
+beep(1)
+
+temp <- rbindlist(plots)
+#temp[,max_depth := factor(paste0("max depth ",max_depth), levels = unique(temp$max_depth))]
+
+data_labels <- temp[,.(label = paste0("Best iter: ",best_iter
+                                      ," train: ",round(best_train,4)
+                                      ," test: ",round(best_test,4))),
+                    by = .(parameter,srno,best_iter,best_train,best_test)]
+
+ggplot(melt(temp[,.(iter,parameter,train_rmse,test_rmse)]
+            ,measure.vars = c("train_rmse","test_rmse"))) +
+  geom_line(aes(x=iter, y=value, color=variable)) +
+  scale_y_continuous(limits = c(0.96,1))  +
+  geom_text(data = data_labels,
+            mapping = aes(x = -Inf, y = -Inf, label = label)
+            ,hjust   = -0.05,  vjust   = -0.5, size = 4) +
+  facet_wrap(~parameter, scales = "free") +
+  labs(title = "Impact of changing early_stopping_rounds",
+       subtitle = "min_child_weight = 500,max_depth = 7,subsample = 0.9,colsample_bytree = 0.1,gamma = 3.6674, alpha=0.1, lambda = 0.9")
+
+
+```
+
+
+### Tree Evaluation 
+
+* early stopping rounds of 10
+* max_depth of 4
+* Best iteration: [270]	train-rmse:0.979610	test-rmse:0.979914
+* Underfitting
+    + A plot of learning curves shows underfitting if:
+      + The training loss remains flat regardless of training.
+      + The training loss continues to decrease until the end of training.
+
+```{r}
+
+xgb_model <- xgb.train(params = 
+                             list(
+                                max_depth = 4
+                                ,gamma = 3.6674
+                                ,min_child_weight = 500
+                                ,subsample = 0.9
+                                ,colsample_bytree = 0.1
+                                ,alpha = 0.1
+                                ,lambda = 0.9
+                             )
+                           ,data = my_train
+                           ,watchlist = watchlist
+                           ,nrounds = 1000
+                           ,eta = 0.2
+                           ,early_stopping_rounds = 10
+                           ,print_every_n = 50
+                           ,verbose = TRUE) 
+
+ggplot(melt(xgb_model$evaluation_log,
+       measure.vars = c("train_rmse","test_rmse"))) +
+    geom_line(aes(x=iter, y=value, color=variable)) +
+    scale_y_continuous(limits = c(0.96,1))  
+
+
+importance <- xgb.importance(model = xgb_model)
+importance[1:10]
+xgb.plot.importance(importance[1:30])
+
+
+
+
+
+
+```
+
+### A sample tree split (tree no 10)
+
+* These values are available in a data.table as shown in below section
+
+```{r fig.width= 10, fig.height=10}
+
+xgb.plot.tree(model=xgb_model,trees = 10)
+# export_graph(graph = xgb.plot.tree(model=xgb_model,trees = i,render=FALSE)
+#              ,file_name = here::here('300_output'
+#                                      ,'individual_trees'
+#                                      ,paste0('20190512_sampletree-depth4_no',i,'.png'))
+#              ,width=2000
+#              ,height=2000)
+
+```
+
+
+### Multi tree plot
+* Visualization of the ensemble of trees as a single collective unit.
+* This function tries to capture the complexity of a gradient boosted tree model in a cohesive way by compressing an ensemble of trees into a single tree-graph representation. 
+* The goal is to improve the interpretability of a model generally seen as black box.
+* Sample plot :
+![](`r here("300_output","20190512_multi_tree_plot.png")`)
+
+
+```{r }
+
+xgb.plot.multi.trees(model = xgb_model
+                     ,feature_names = xgb_model$feature_names
+                     ,features_keep = 5
+                     ,render = FALSE)
+```
+
+
+### Model trees deepness
+
+* Visualizes distributions related to depth of tree leafs. 
+* Two distributions with respect to the leaf depth are plotted on top of each other:
+  + the distribution of the number of leafs in a tree model at a certain depth;
+  + the distribution of average weighted number of observations ("cover") ending up in leafs at certain depth.
+* Those could be helpful in determining sensible ranges of the max_depth and min_child_weight parameters.
+
+
+
+```{r}
+xgb.ggplot.deepness(model=xgb_model)
+```
+
+* When which="max.depth" or which="med.depth", plots of either maximum or median depth per tree with respect to tree number are created. 
+
+```{r}
+xgb.ggplot.deepness(model=xgb_model, which = "max.depth")
+xgb.ggplot.deepness(model=xgb_model, which = "med.depth")
+```
+
+* And which="med.weight" allows to see how a tree's median absolute leaf weight changes through the iterations.
+
+```{r}
+xgb.ggplot.deepness(model=xgb_model, which = "med.weight")
+
+```
+
+* Other than producing plots (when plot=TRUE), the xgb.plot.deepness function silently returns a processed data.table where each row corresponds to a terminal leaf in a tree model, and contains information about leaf's depth, cover, and weight (which is used in calculating predictions).
+
+```{r}
+
+temp <- xgb.plot.deepness(model=xgb_model, plot = FALSE)
+
+dim(temp)
+temp[Tree == 10]
+
+
+```
+
+### SHAP contribution dependency plots [TO DO]
+
+* Visualizing the SHAP feature contribution to prediction dependencies on feature value.
+* These scatterplots represent how SHAP feature contributions depend of feature values. 
+* The similarity to partial dependency plots is that they also give an idea for how feature values affect predictions. 
+* However, in partial dependency plots, we usually see marginal dependencies of model prediction on feature value, while SHAP contribution dependency plots display the estimated contributions of a feature to model prediction for each individual case.
+
+
+```{r eval = FALSE}
+
+xgb.plot.shap(data = my_train
+              ,model = xgb_model)
+
+```
+
+### XGBoost Explainer [TO DO]
+
+* Waterfall chart for 100th observation
+* Actual value for the 100th observation  `r my_test_labels[100]`
+* Predicted value as shown in the chart
+```{r results = "hide"}
+
+# p_load(devtools)
+# install_github("AppliedDataSciencePartners/xgboostExplainer")
+library(xgboostExplainer)
+
+explainer <- buildExplainer(xgb_model
+                            ,my_train
+                            ,type="regression"
+                            ,base_score = 0.5
+                            ,trees_idx = NULL)
+#* Threshold set to 0.01
+showWaterfall(xgb_model
+              ,explainer
+              ,my_test
+              ,cbind(my_test_4xgb_explainer,my_test_labels)
+              ,100
+              ,type = "regression"
+              ,threshold = 0.01) 
+
+
+#pred.breakdown <- explainPredictions(xgb_model, explainer, my_test)
+
+```
+
+
+```{r eval = FALSE}
+
+# Other XGB plots [TO BE REVIEWED]
+#xgb.plot.multi.trees(model = xgb_model)
+#xgb.plot.deepness(model=xgb_model)
+#xgb.plot.shap()
+xgb_model$best_iteration
+xgb.plot.tree(model=xgb_model,trees = 75, plot_height = 2000)
+p_load(DiagrammeR)
+p_load(DiagrammeRsvg)
+p_load(rsvg)
+
+export_graph(graph = xgb.plot.tree(model=xgb_model,trees = 1236,render=FALSE)
+             ,file_name = here::here('230_src_RMD-and-output','tree.png'), width=1500, height=1900)
+
+
+
+# Feature contributions [HOW CAN THIS BE USED]
+#pred <- predict(xgb_model,newdata = my_test ,predcontrib = TRUE)
+
+
+
+#Find linear combinations or correlated variables and remove from data
+if(!require(caret,quietly = TRUE)) { install.packages("caret"); library(caret)}
+mtcars$wt_new <- mtcars$wt * 2
+#NAs gives error
+lincomb <- findLinearCombos(mtcars[complete.cases(mtcars),])
+lincomb$linearCombos[[1]]
+colnames(mtcars)[lincomb$linearCombos[[1]]]
+mtcars[-lincomb$remove]
+
+
+```
+
+
+
+
+### Additional Notes
+
+* So you may leave all your features in and run a few iterations to see how important/not they are and the ones that **consistently lie at the bottom** of the var imp chart can be excluded from subsequent runs to **improve computational performance**
+
+* selected the feature that had the greatest importance on average across the folds, **noted that feature down** and removed that feature and all features highly correlated with it from the set. 
+    + I repeated that process until I had selected 35 features out of ~500. 
+    + I'm getting the best validation and test set results with this approach so far
+
+* Compare with my best results so far which are depth=3, n_estimators=900, subsample=1, colsample_bytree=0.07, learning_rate=0.012, min_child_weight=500 that 
+    + give avg. AUC 0.7718, 75.05% precision, 63.86% recall 
+    + a very big improvement which I can only get when I set colsample_bytree to a very low value **(such that very few features are sampled per tree!)**
+    + Having a high number of trees then ensures that all (or nearly all) of the possible 2-feature-combinations are tried in at least one tree.
+
+* In random forests, the optimal setting for feature subsampling is usually the square root of the number of features:
+
+############## Unused features Moved here 
+
+
+Notes on manual parameter tuning, before the paramter - plots
+
+* Base : eta = 0.2,max_depth=5,gamma = 3.6674,subsample = 0.8,colsample_bytree = 0.8
+  + Stopping. Best iteration: [117]	train-rmse:0.967516	test-rmse:0.980518
+
+Increase min_child_weight
+* with min_child_weight = 3000 (approx 1% of nrow)
+  + Stopping. Best iteration: [231]	train-rmse:0.979333	test-rmse:0.976716
+  + also look at hardly any difference in train-test => less overfit ?
+
+* with min_child_weight = 6000 (doubled from previous)
+  + Stopping. Best iteration: [237]	train-rmse:0.982928	test-rmse:0.978672
+  + No improvement
+  
+Fix min_child_weight = 3000
+
+* colsample_bytree = 0.05 (use only 5% of 300 = 15 features in a tree)
+  + Stopping. Best iteration: [328]	train-rmse:0.986927	test-rmse:0.980679
+
+* colsample_bytree = 0.057 ie sqrt(ncol(my_train))/ncol(my_train)
+  + Stopping. Best iteration: [362]	train-rmse:0.984746	test-rmse:0.979191
+
+* colsample_bytree = 0.1 or 0.15
+  + Stopping. Best iteration: [285]	train-rmse:0.981325	test-rmse:0.977426
+
+
+Fix colsample_bytree = 0.1 and Adjust gamma - minimum loss reduction required to make a split.
+
+* gamma = 10
+  + Stopping. Best iteration: [233]	train-rmse:0.986519	test-rmse:0.980443
+  + Worsens
+  
+* gamma = 1 (default)
+  + Stopping. Best iteration: [258]	train-rmse:0.982630	test-rmse:0.977986
+  + Better than prev
+
+* gamma =2 
+  + Stopping. Best iteration: [302]	train-rmse:0.982471	test-rmse:0.978271
+  + slightly better
+
+* **Optimal gamma : 2 to 4**
+  
+* Revert gamma to the optimal
+
+* Reduce min_child_weight = from 3000 to 1000
+  + Stopping. Best iteration:[279]	train-rmse:0.979722	test-rmse:0.976273
+  + Improved
+
+* min_child_weight = 500
+  + Stopping. Best iteration: [375]	train-rmse:0.975512	test-rmse:0.974572
+  + Improved
+
+* min_child_weight = 100
+  + Stopping. Best iteration:[238]	train-rmse:0.975921	test-rmse:0.975627  
+  + Worsened
+
+* min_child_weight = 50
+  + Stopping. Best iteration: [298]	train-rmse:0.971789	test-rmse:0.974799
+  + Improved
+
+* min_child_weight = 10
+  + Stopping. Best iteration: [288]	train-rmse:0.969610	test-rmse:0.975209
+  + Worsened
+  
+* **min_child_weight Optimal anywhere between 50 to 500**
+
+  
+Param Check : eta = 0.2,max_depth=5,gamma = 3.6674,min_child_weight = 500
+        ,subsample = 1,colsample_bytree = 0.1  
+        test-rmse:0.974572
+        
+* alpha [default=0]
+  + L1 regularization term on weight (analogous to Lasso regression)
+  + Can be used in case of very high dimensionality so that the algorithm runs faster when implemented
+
+* alpha = 1
+  + Stopping. Best iteration: [252]	train-rmse:0.978616	test-rmse:0.975647
+  + Worsened
+  
+*  alpha 0.8
+  + Stopping. Best iteration: [307]	train-rmse:0.977357	test-rmse:0.975294
+  + Improved
+
+* alpha = 0.5
+  + Stopping. Best iteration: [302]	train-rmse:0.976652	test-rmse:0.974510
+  + Improved
+  
+* alpha = 0.3
+  + Stopping. Best iteration: [358]	train-rmse:0.975707	test-rmse:0.974575
+  + Worsened
+
+**Fix alpha optimal around 0.5**
+  
+  
+
+**Conclusion**
+* On 300 features model of eta 0.2 and max depth of 5
+* min_child_weight of 500 **made big reduction in test-rmse and also train-vs-test rmse difference**
+* colsample_bytree = 0.1 also reduced test-rmse
+* gamma optimal between 2 - 4
+* alpha default 0 to 0.5 improved performance a bit
+* Reducing subsample worsens the performance
+* Reducing max_depth from 5 worsens the performance
+
+
+
+### Re-evaluate the best itin on my_test
+
+max_depth = 6
+Stopping. Best iteration: [285]	train-rmse:0.975438	test-rmse:0.974898
+
+```{r eval = FALSE}
+
+glimpse(DT)
+
+xgb_model <- xgb.train(
+    params = list(
+             booster = "gbtree"
+            ,objective = "reg:linear"
+            ,eval_metric = "rmse"
+        ,eta = 0.2
+        ,max_depth=10
+        ,gamma = 3.6674
+        ,min_child_weight = 500
+        ,subsample = 1
+        ,colsample_bytree = 0.1
+        ,alpha = 0.5
+        )
+,data = my_train
+,watchlist = watchlist
+,nrounds = 10000
+,early_stopping_rounds = 5
+,verbose = TRUE
+,prediction = TRUE) 
+
+xgb_model$evaluation_log
+unlist(xgb_model$params)
+
+
+```
+
+
+
+### Evaluating using the best parameters
+
+Early stopping of 10 gives Best iteration: [368]	train-rmse:0.973267	**test-rmse:0.972976**
+
+```{r eval=FALSE}
+
+xgb_model <- xgb.train(params = 
+                             list(
+                                max_depth = 7
+                                ,gamma = 3.6674
+                                ,min_child_weight = 500
+                                ,subsample = 0.9
+                                ,colsample_bytree = 0.1
+                                ,alpha = 0.1
+                                ,lambda = 0.9
+                             )
+                           ,data = my_train
+                           ,watchlist = watchlist
+                           ,nrounds = 1000
+                           ,eta = 0.2
+                           ,early_stopping_rounds = 10
+                           ,print_every_n = 10
+                           ,verbose = TRUE) 
+
+```
+
+### Plot the learning curve
+```{r eval=FALSE}
+# Plot learning curve
+ggplot(melt(xgb_model$evaluation_log,
+       measure.vars = c("train_rmse","test_rmse"))) +
+    geom_line(aes(x=iter, y=value, color=variable)) +
+    scale_y_continuous(limits = c(0.96,1))  
+
+
+```
+
+### Feature importance
+```{r eval = FALSE}
+importance <- xgb.importance(model = xgb_model)
+importance[1:30]
+xgb.plot.importance(importance[1:30])
+
+* Tree for iteration no 368
+![](`r here("300_output","20190512_tree-depth7-rmse0_9729.png.png")`)
+
+
+
+```
+
+
+
+
+```{r eval=FALSE}
+
+export_graph(graph = xgb.plot.tree(model=xgb_model,trees = 368,render=FALSE)
+             ,file_name = here::here('300_output','20190512_tree-depth7-rmse0_9729.png'), width=2000, height=2000)
+
+
+
+```
+
+
+
+
+### Functions
+```{r eval = FALSE}
+
+fn_agg <- function(DT,keycols_list,FUNs,measure_col) {
+  for(i in keycols_list) {
+    for(j in FUNs) {
+      new_col_name <- paste0(paste0(unlist(i),collapse  ="_"),"_",eval(j))
+      DT[,(new_col_name) := lapply(.SD,get(j)), by = i, .SDcols = measure_col]
+    }
+  }
+}
+
+
+fn_ratio <- function(DT,col_pair) {
+  for(i in col_pair) {
+      new_col_name <- paste0(paste0(unlist(i),collapse  ="_"),"_ratio")
+      
+      print(eval(i[2]))
+      DT[,(new_col_name) := ifelse(get(i[2]) == 0 | is.na(get(i[2]))
+                                   ,0
+                                   ,get(i[1]) / get(i[2])) ]
+    
+  }
+}
+
+fn_diff <- function(DT,col_pair) {
+  for(i in col_pair) {
+      new_col_name <- paste0(paste0(unlist(i),collapse  ="_"),"_diff")
+      
+      print(eval(i[2]))
+      DT[,(new_col_name) := get(i[1]) - get(i[2]) ] 
+    
+  }
+}
+
+
+```
+
+
+### Aggregation
+```{r eval = FALSE}
+
+str(DT)
+
+ST <- Sys.time()
+
+member_list <- list(
+  c("flag","memberid","channel_code")
+  ,c("flag","memberid","main_product_code")
+  ,c("flag","memberid","persontravellingid")
+  ,c("flag","memberid","resort_region_code")
+  ,c("flag","memberid","resort_type_code")
+  ,c("flag","memberid","room_type_booked_code")
+  ,c("flag","memberid","season_holidayed_code")
+  ,c("flag","memberid","state_code_residence")
+  ,c("flag","memberid","state_code_resort")
+  ,c("flag","memberid","booking_type_code")
+  ,c("flag","memberid","cluster_code")
+  ,c("flag","memberid","reservationstatusid_code")
+  ,c("flag","memberid","resort_id")
+  
+  
+  ,c("flag","memberid","checkin_date_year")
+  ,c("flag","memberid","checkin_date_month")
+  ,c("flag","memberid","checkin_date_week_of_year")
+
+  ,c("flag","memberid","checkin_date_bom")
+  ,c("flag","memberid","checkin_date_eom")
+  ,c("flag","memberid","checkin_date_dow")
+  ,c("flag","memberid","checkin_date_dow_type")
+  
+  ,c("flag","memberid","booking_date_year")
+  ,c("flag","memberid","booking_date_month")
+  ,c("flag","memberid","booking_date_week_of_year")
+
+  ,c("flag","memberid","booking_date_bom")
+  ,c("flag","memberid","booking_date_eom")
+  ,c("flag","memberid","booking_date_dow")
+  ,c("flag","memberid","booking_date_dow_type")
+  
+  ,c("flag","memberid","no_of_rooms")
+)
+fn_agg(DT,member_list,c("sum","mean","median"),"roomnights") 
+fn_agg(DT,member_list,c("sum","mean","median"),"length_of_stay") 
+fn_agg(DT,member_list,c("mean","median"),"lead_time") 
+
+fn_agg(DT,member_list,c("length"),"reservation_id")
+
+
+
+resort_list <- list(
+  c("flag","resort_id","channel_code")
+  ,c("flag","resort_id","main_product_code")
+  ,c("flag","resort_id","persontravellingid")
+  # ,c("flag","resort_id","resort_region_code")
+  # ,c("flag","resort_id","resort_type_code")
+  # ,c("flag","resort_id","room_type_booked_code")
+  ,c("flag","resort_id","season_holidayed_code")
+  ,c("flag","resort_id","state_code_residence")
+  ,c("flag","resort_id","state_code_resort")
+  ,c("flag","resort_id","booking_type_code")
+  # ,c("flag","resort_id","cluster_code")
+  ,c("flag","resort_id","reservationstatusid_code")
+  #,c("flag","resort_id","memberid")
+  
+  
+  ,c("flag","resort_id","checkin_date_year")
+  ,c("flag","resort_id","checkin_date_month")
+  ,c("flag","resort_id","checkin_date_week_of_year")
+
+  ,c("flag","resort_id","checkin_date_bom")
+  ,c("flag","resort_id","checkin_date_eom")
+  ,c("flag","resort_id","checkin_date_dow")
+  ,c("flag","resort_id","checkin_date_dow_type")
+  
+  ,c("flag","resort_id","booking_date_year")
+  ,c("flag","resort_id","booking_date_month")
+  ,c("flag","resort_id","booking_date_week_of_year")
+
+  ,c("flag","resort_id","booking_date_bom")
+  ,c("flag","resort_id","booking_date_eom")
+  ,c("flag","resort_id","booking_date_dow")
+  ,c("flag","resort_id","booking_date_dow_type")
+  
+  ,c("flag","resort_id","no_of_rooms")
+)
+
+
+fn_agg(DT,resort_list,c("sum","mean","median"),"roomnights") 
+fn_agg(DT,resort_list,c("mean","median"),"length_of_stay") 
+fn_agg(DT,resort_list,c("mean","median"),"lead_time") 
+
+
+fn_agg(DT,resort_list,c("length"),"reservation_id")
+
+
+ST
+Sys.time()
+#35mins
+
+  
+
+```
+
+
+
+```{r eval = FALSE}
+
+
+
+####### Aggregates ###
+
+############## Group by Number of bookings per year ############
+
+vars <- c("main_product_code"
+          ,"room_type_booked_code","resort_type_code","cluster_code"
+          ,"resort_id"
+          ,"checkin_date_year","checkin_date_month","checkin_date_dow"
+          ,"state_code_residence","persontravellingid"
+          ,"member_age_buckets","season_holidayed_code")
+
+for(i in vars) {
+    temp <- c("flag",eval(i))
+    
+    DT[flag == "train",
+    paste0(i,"_groupby")  := length(reservation_id),
+    by = temp]
+    
+    DT[flag == "test",
+    paste0(i,"_groupby")  := length(reservation_id),
+    by = temp]
+}
+
+
+
+
+########### Total Pax outlier exploration ########
+DT[,tot_pax_var1 := total_pax - (numberofadults + numberofchildren) ]
+
+DT[,tot_pax_var2 := total_pax - numberofadults  ]
+
+vars <- c("channel_code","booking_type_code","main_product_code"
+          ,"room_type_booked_code","resort_type_code","cluster_code"
+          ,"resort_id","reservationstatusid_code"
+          ,"persontravellingid"
+          ,"checkin_date_year","checkin_date_month","checkin_date_dow"
+          ,"member_age_buckets","season_holidayed_code")
+
+
+for(i in vars) {
+    temp <- c("flag",eval(i),"tot_pax_var1")
+    
+    DT[flag == "train",
+    paste0(i,"_tot_pax_var1")  := length(reservation_id),
+    by = temp]
+    
+    DT[flag == "test",
+    paste0(i,"_tot_pax_var1")  := length(reservation_id),
+    by = temp]
+}
+
+
+for(i in vars) {
+    temp <- c("flag",eval(i),"tot_pax_var2")
+    
+    DT[flag == "train",
+    paste0(i,"_tot_pax_var2")  := length(reservation_id),
+    by = temp]
+    
+    DT[flag == "test",
+    paste0(i,"_tot_pax_var2")  := length(reservation_id),
+    by = temp]
+}
+
+
+
+
+
+############## Top important feature changed to factor!!!! ############
+############# Length of Stay interactions ##################
+
+#DT$length_of_stay_new <- DT$length_of_stay
+
+group_category(data = DT, feature = "length_of_stay", threshold = 0.001,update = TRUE)
+
+vars <- c("booking_type_code","main_product_code"
+          ,"room_type_booked_code","resort_type_code","cluster_code"
+          ,"resort_id"
+          ,"checkin_date_year","checkin_date_month","checkin_date_dow"
+          ,"state_code_residence","persontravellingid"
+          ,"member_age_buckets","season_holidayed_code")
+
+
+for(i in vars) {
+    temp <- c("flag",eval(i),"length_of_stay")
+    
+    DT[flag == "train",
+    paste0(i,"_length_of_stay")  := length(reservation_id),
+    by = temp]
+    
+    DT[flag == "test",
+    paste0(i,"_length_of_stay")  := length(reservation_id),
+    by = temp]
+}
+
+
+############## Second important feature changed to factor!!!! ############
+############# No of rooms interactions ##################
+
+group_category(data = DT, feature = "no_of_rooms", threshold = 0.001, update = TRUE)
+
+vars <- c("booking_type_code","main_product_code"
+          ,"room_type_booked_code","resort_type_code","cluster_code"
+          ,"resort_id"
+          ,"checkin_date_year","checkin_date_month","checkin_date_dow"
+          ,"state_code_residence","persontravellingid"
+          ,"member_age_buckets","season_holidayed_code")
+
+for(i in vars) {
+    temp <- c("flag",eval(i),"no_of_rooms")
+    
+    DT[flag == "train",
+    paste0(i,"_no_of_rooms")  := length(reservation_id),
+    by = temp]
+    
+    DT[flag == "test",
+    paste0(i,"_no_of_rooms")  := length(reservation_id),
+    by = temp]
+}
+
+
+
+
+
+
+  
+
+```
+
+
+

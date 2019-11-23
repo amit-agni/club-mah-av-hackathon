@@ -1,0 +1,138 @@
+Took over 10 hours and was still working ... 
+Unstable results
+
+
+nrounds = 800.0000	eta = 0.2181	max_depth = 6.0000	gamma = 0.0000	Value = -0.8807
+
+
+nrounds = 746.5130	eta = 0.2058	max_depth = 5.0000	gamma = 3.6674	Value = -0.9625 
+Gave LB Score of
+
+
+nrounds = 372.6622	eta = 0.2842	max_depth = 6.0000	gamma = 0.0000	Value = -0.9136 
+
+
+nrounds = 50.0000	eta = 0.5137	max_depth = 6.0000	gamma = 0.0000	Value = -0.9639 
+
+
+
+
+
+opt_res <- BayesianOptimization(opt_fn
+                                ,bounds = list(
+                                    nrounds = c(50,800)
+                                    ,eta = c(0.001,0.7)
+                                    ,max_depth = c(2L,6L)
+                                    ,gamma = c(0,50)
+                               )
+                                ,init_grid_dt = NULL
+                                ,init_points = 10
+                                ,n_iter = 200
+                                ,acq = "ucb"
+                                ,kappa = 2.576
+                                ,eps = 0.0
+                                ,verbose = TRUE)
+
+elapsed = 42.27	Round = 1	nrounds = 131.4297	eta = 0.6500	max_depth = 2.0000	gamma = 16.3451	Value = -0.9875 
+elapsed = 48.00	Round = 2	nrounds = 770.2116	eta = 0.3831	max_depth = 4.0000	gamma = 21.1780	Value = -0.9862 
+elapsed = 44.50	Round = 3	nrounds = 489.0235	eta = 0.5430	max_depth = 5.0000	gamma = 15.2506	Value = -0.9829 
+elapsed = 37.27	Round = 4	nrounds = 230.4302	eta = 0.5285	max_depth = 5.0000	gamma = 42.2915	Value = -0.9892 
+elapsed = 88.64	Round = 5	nrounds = 745.4458	eta = 0.1456	max_depth = 5.0000	gamma = 31.7146	Value = -0.9861 
+elapsed = 78.92	Round = 6	nrounds = 625.7758	eta = 0.2235	max_depth = 3.0000	gamma = 18.8206	Value = -0.9859 
+elapsed = 245.66	Round = 7	nrounds = 286.5149	eta = 0.5153	max_depth = 4.0000	gamma = 1.6956	Value = -0.9599 
+elapsed = 47.94	Round = 8	nrounds = 187.3272	eta = 0.3605	max_depth = 6.0000	gamma = 48.9537	Value = -0.9889 
+elapsed = 60.86	Round = 9	nrounds = 365.8360	eta = 0.3749	max_depth = 4.0000	gamma = 38.3693	Value = -0.9880 
+elapsed = 62.62	Round = 10	nrounds = 686.5061	eta = 0.5157	max_depth = 3.0000	gamma = 13.9369	Value = -0.9851 
+elapsed = 72.93	Round = 11	nrounds = 50.0000	eta = 0.0010	max_depth = 6.0000	gamma = 0.0000	Value = -6.9546 
+elapsed = 60.17	Round = 12	nrounds = 50.0000	eta = 0.7000	max_depth = 6.0000	gamma = 0.0000	Value = -0.9604 
+elapsed = 54.04	Round = 13	nrounds = 50.0000	eta = 0.1795	max_depth = 6.0000	gamma = 50.0000	Value = -0.9874 
+elapsed = 726.13	Round = 14	nrounds = 800.0000	eta = 0.1744	max_depth = 5.0000	gamma = 0.0000	Value = -0.9335 
+elapsed = 60.91	Round = 15	nrounds = 800.0000	eta = 0.1773	max_depth = 4.0000	gamma = 50.0000	Value = -0.9894 
+elapsed = 37.12	Round = 16	nrounds = 50.0000	eta = 0.2944	max_depth = 4.0000	gamma = 0.0000	Value = -0.9843 
+elapsed = 46.18	Round = 17	nrounds = 50.0000	eta = 0.4426	max_depth = 6.0000	gamma = 50.0000	Value = -0.9887 
+elapsed = 21.89	Round = 18	nrounds = 50.0000	eta = 0.7000	max_depth = 2.0000	gamma = 50.0000	Value = -0.9909 
+elapsed = 36.94	Round = 19	nrounds = 50.0000	eta = 0.1578	max_depth = 4.0000	gamma = 0.0000	Value = -0.9900 
+elapsed = 37.41	Round = 20	nrounds = 800.0000	eta = 0.6771	max_depth = 6.0000	gamma = 43.3110	Value = -0.9886 
+elapsed = 424.09	Round = 21	nrounds = 800.0000	eta = 0.2547	max_depth = 6.0000	gamma = 1.4986	Value = -0.9199 
+elapsed = 346.04	Round = 22	nrounds = 800.0000	eta = 0.6862	max_depth = 2.0000	gamma = 0.0000	Value = -0.9732 
+elapsed = 22.13	Round = 23	nrounds = 50.0000	eta = 0.5486	max_depth = 2.0000	gamma = 0.0000	Value = -0.9900 
+elapsed = 59.16	Round = 24	nrounds = 800.0000	eta = 0.2701	max_depth = 6.0000	gamma = 50.0000	Value = -0.9883 
+elapsed = 53.64	Round = 25	nrounds = 50.0000	eta = 0.3951	max_depth = 6.0000	gamma = 0.0000	Value = -0.9663 
+elapsed = 870.52	Round = 26	nrounds = 800.0000	eta = 0.2181	max_depth = 6.0000	gamma = 0.0000	Value = -0.8807
+elapsed = 754.55	Round = 27	nrounds = 693.0767	eta = 0.6100	max_depth = 6.0000	gamma = 0.0000	Value = -0.8082 
+elapsed = 38.38	Round = 28	nrounds = 133.9673	eta = 0.6007	max_depth = 6.0000	gamma = 41.0606	Value = -0.9886 
+elapsed = 345.34	Round = 29	nrounds = 800.0000	eta = 0.6140	max_depth = 2.0000	gamma = 0.0000	Value = -0.9743 
+elapsed = 54.43	Round = 30	nrounds = 50.0000	eta = 0.6339	max_depth = 6.0000	gamma = 0.0000	Value = -0.9608 
+elapsed = 21.76	Round = 31	nrounds = 50.0000	eta = 0.4499	max_depth = 2.0000	gamma = 46.5463	Value = -0.9919 
+elapsed = 234.03	Round = 32	nrounds = 746.5130	eta = 0.2058	max_depth = 5.0000	gamma = 3.6674	Value = -0.9625 
+elapsed = 345.30	Round = 33	nrounds = 800.0000	eta = 0.3243	max_depth = 2.0000	gamma = 0.0000	Value = -0.9790 
+elapsed = 53.49	Round = 34	nrounds = 50.0000	eta = 0.2399	max_depth = 6.0000	gamma = 43.6293	Value = -0.9872 
+elapsed = 224.29	Round = 35	nrounds = 596.0997	eta = 0.1843	max_depth = 4.0000	gamma = 2.4587	Value = -0.9719 
+elapsed = 345.65	Round = 36	nrounds = 800.0000	eta = 0.1235	max_depth = 2.0000	gamma = 0.0000	Value = -0.9829 
+elapsed = 346.09	Round = 37	nrounds = 800.0000	eta = 0.1595	max_depth = 2.0000	gamma = 0.0000	Value = -0.9819 
+elapsed = 141.77	Round = 38	nrounds = 451.7901	eta = 0.0780	max_depth = 2.0000	gamma = 49.9214	Value = -0.9919 
+elapsed = 132.52	Round = 39	nrounds = 393.2798	eta = 0.0977	max_depth = 6.0000	gamma = 29.2480	Value = -0.9847 
+elapsed = 40.62	Round = 40	nrounds = 111.0059	eta = 0.4832	max_depth = 6.0000	gamma = 50.0000	Value = -0.9886 
+elapsed = 319.13	Round = 41	nrounds = 294.3121	eta = 0.5812	max_depth = 6.0000	gamma = 0.0000	Value = -0.8901 
+elapsed = 866.90	Round = 42	nrounds = 800.0000	eta = 0.0010	max_depth = 6.0000	gamma = 0.0000	Value = -3.4035 
+elapsed = 540.85	Round = 43	nrounds = 500.8898	eta = 0.7000	max_depth = 6.0000	gamma = 0.0000	Value = -0.8343 
+elapsed = 87.92	Round = 44	nrounds = 202.2807	eta = 0.1920	max_depth = 2.0000	gamma = 0.0000	Value = -0.9876 
+elapsed = 238.12	Round = 45	nrounds = 546.5426	eta = 0.6532	max_depth = 2.0000	gamma = 0.0000	Value = -0.9771 
+elapsed = 869.21	Round = 46	nrounds = 800.0000	eta = 0.5366	max_depth = 6.0000	gamma = 0.0000	Value = -0.8025 
+elapsed = 401.97	Round = 47	nrounds = 372.6622	eta = 0.2842	max_depth = 6.0000	gamma = 0.0000	Value = -0.9136 
+elapsed = 217.23	Round = 48	nrounds = 501.9935	eta = 0.1123	max_depth = 2.0000	gamma = 0.0000	Value = -0.9857 
+elapsed = 107.02	Round = 49	nrounds = 800.0000	eta = 0.4400	max_depth = 2.0000	gamma = 3.7798	Value = -0.9828 
+elapsed = 228.06	Round = 50	nrounds = 800.0000	eta = 0.0691	max_depth = 6.0000	gamma = 13.5935	Value = -0.9782 
+elapsed = 94.31	Round = 51	nrounds = 800.0000	eta = 0.5758	max_depth = 5.0000	gamma = 8.5407	Value = -0.9696 
+elapsed = 212.65	Round = 52	nrounds = 478.3299	eta = 0.4190	max_depth = 2.0000	gamma = 0.0000	Value = -0.9795 
+elapsed = 39.29	Round = 53	nrounds = 800.0000	eta = 0.7000	max_depth = 6.0000	gamma = 50.0000	Value = -0.9877 
+elapsed = 406.46	Round = 54	nrounds = 376.6755	eta = 0.7000	max_depth = 6.0000	gamma = 3.2752	Value = -0.8797 
+elapsed = 111.31	Round = 55	nrounds = 639.0759	eta = 0.1136	max_depth = 4.0000	gamma = 26.5384	Value = -0.9860 
+elapsed = 40.93	Round = 56	nrounds = 419.2859	eta = 0.3231	max_depth = 2.0000	gamma = 50.0000	Value = -0.9914 
+elapsed = 190.32	Round = 57	nrounds = 439.4210	eta = 0.6079	max_depth = 2.0000	gamma = 0.0000	Value = -0.9780 
+elapsed = 48.95	Round = 58	nrounds = 800.0000	eta = 0.3471	max_depth = 6.0000	gamma = 41.4219	Value = -0.9876 
+elapsed = 558.31	Round = 59	nrounds = 513.7631	eta = 0.7000	max_depth = 6.0000	gamma = 0.0000	Value = -0.8310 
+elapsed = 865.69	Round = 60	nrounds = 800.0000	eta = 0.4912	max_depth = 6.0000	gamma = 0.0000	Value = -0.8106 
+elapsed = 135.02	Round = 61	nrounds = 800.0000	eta = 0.0833	max_depth = 2.0000	gamma = 50.0000	Value = -0.9913 
+elapsed = 53.57	Round = 62	nrounds = 50.0000	eta = 0.5137	max_depth = 6.0000	gamma = 0.0000	Value = -0.9639 
+elapsed = 49.07	Round = 63	nrounds = 238.1159	eta = 0.2669	max_depth = 2.0000	gamma = 50.0000	Value = -0.9909 
+elapsed = 520.95	Round = 64	nrounds = 478.3982	eta = 0.6999	max_depth = 6.0000	gamma = 0.0000	Value = -0.8380 
+elapsed = 54.01	Round = 65	nrounds = 791.0315	eta = 0.5348	max_depth = 4.0000	gamma = 11.9350	Value = -0.9818 
+elapsed = 41.35	Round = 66	nrounds = 800.0000	eta = 0.4597	max_depth = 6.0000	gamma = 50.0000	Value = -0.9887 
+elapsed = 21.46	Round = 67	nrounds = 50.0000	eta = 0.1299	max_depth = 2.0000	gamma = 50.0000	Value = -1.0078 
+elapsed = 138.95	Round = 68	nrounds = 800.0000	eta = 0.0763	max_depth = 6.0000	gamma = 50.0000	Value = -0.9878 
+elapsed = 21.68	Round = 69	nrounds = 50.0000	eta = 0.5987	max_depth = 2.0000	gamma = 50.0000	Value = -0.9918 
+elapsed = 54.71	Round = 70	nrounds = 50.0000	eta = 0.1957	max_depth = 6.0000	gamma = 0.0000	Value = -0.9754 
+elapsed = 349.06	Round = 71	nrounds = 800.0000	eta = 0.0010	max_depth = 2.0000	gamma = 50.0000	Value = -3.4101 
+elapsed = 340.74	Round = 72	nrounds = 315.4253	eta = 0.7000	max_depth = 6.0000	gamma = 0.0000	Value = -0.8760 
+elapsed = 432.23	Round = 73	nrounds = 401.4959	eta = 0.7000	max_depth = 6.0000	gamma = 0.0000	Value = -0.8551 
+elapsed = 444.17	Round = 74	nrounds = 412.1750	eta = 0.3463	max_depth = 6.0000	gamma = 0.0000	Value = -0.8960 
+elapsed = 21.69	Round = 75	nrounds = 50.0000	eta = 0.3541	max_depth = 2.0000	gamma = 0.0000	Value = -0.9933 
+elapsed = 96.28	Round = 76	nrounds = 429.2242	eta = 0.1186	max_depth = 6.0000	gamma = 50.0000	Value = -0.9877 
+elapsed = 859.97	Round = 77	nrounds = 800.0000	eta = 0.7000	max_depth = 6.0000	gamma = 0.0000	Value = -0.7783 
+elapsed = 877.22	Round = 78	nrounds = 800.0000	eta = 0.7000	max_depth = 6.0000	gamma = 0.0000	Value = -0.7780 
+elapsed = 62.18	Round = 79	nrounds = 599.4030	eta = 0.2332	max_depth = 6.0000	gamma = 50.0000	Value = -0.9879 
+elapsed = 21.87	Round = 80	nrounds = 50.0000	eta = 0.7000	max_depth = 2.0000	gamma = 0.0000	Value = -0.9890 
+elapsed = 21.96	Round = 81	nrounds = 50.0000	eta = 0.2508	max_depth = 2.0000	gamma = 0.0000	Value = -0.9976 
+elapsed = 33.90	Round = 82	nrounds = 50.0000	eta = 0.6637	max_depth = 6.0000	gamma = 50.0000	Value = -0.9907 
+elapsed = 878.96	Round = 83	nrounds = 799.9058	eta = 0.7000	max_depth = 6.0000	gamma = 0.0000	Value = -0.7783 
+elapsed = 21.72	Round = 84	nrounds = 50.0000	eta = 0.4038	max_depth = 2.0000	gamma = 50.0000	Value = -0.9924 
+elapsed = 37.19	Round = 85	nrounds = 800.0000	eta = 0.6189	max_depth = 6.0000	gamma = 50.0000	Value = -0.9902 
+elapsed = 48.70	Round = 86	nrounds = 800.0000	eta = 0.4126	max_depth = 6.0000	gamma = 50.0000	Value = -0.9887 
+elapsed = 55.11	Round = 87	nrounds = 50.0000	eta = 0.4501	max_depth = 6.0000	gamma = 0.0000	Value = -0.9659 
+elapsed = 762.66	Round = 88	nrounds = 800.0000	eta = 0.7000	max_depth = 6.0000	gamma = 1.2031	Value = -0.8068 
+elapsed = 861.59	Round = 89	nrounds = 799.9807	eta = 0.7000	max_depth = 6.0000	gamma = 0.0000	Value = -0.7783 
+elapsed = 863.04	Round = 90	nrounds = 800.0000	eta = 0.6433	max_depth = 6.0000	gamma = 0.0018	Value = -0.7844 
+elapsed = 61.69	Round = 91	nrounds = 800.0000	eta = 0.2298	max_depth = 2.0000	gamma = 38.6191	Value = -0.9903 
+elapsed = 862.31	Round = 92	nrounds = 798.0249	eta = 0.7000	max_depth = 6.0000	gamma = 0.0000	Value = -0.7786 
+elapsed = 21.71	Round = 93	nrounds = 50.0000	eta = 0.1849	max_depth = 2.0000	gamma = 29.8263	Value = -1.0022 
+elapsed = 864.50	Round = 94	nrounds = 800.0000	eta = 0.7000	max_depth = 6.0000	gamma = 0.1563	Value = -0.7779 
+elapsed = 874.90	Round = 95	nrounds = 800.0000	eta = 0.7000	max_depth = 6.0000	gamma = 0.0000	Value = -0.7780 
+elapsed = 870.89	Round = 96	nrounds = 800.0000	eta = 0.7000	max_depth = 6.0000	gamma = 0.4586	Value = -0.7773 
+elapsed = 860.45	Round = 97	nrounds = 798.2777	eta = 0.7000	max_depth = 6.0000	gamma = 0.0986	Value = -0.7778 
+elapsed = 868.46	Round = 98	nrounds = 800.0000	eta = 0.7000	max_depth = 6.0000	gamma = 0.0000	Value = -0.7780 
+elapsed = 862.22	Round = 99	nrounds = 800.0000	eta = 0.6996	max_depth = 6.0000	gamma = 0.1068	Value = -0.7806 
+elapsed = 865.14	Round = 100	nrounds = 800.0000	eta = 0.7000	max_depth = 6.0000	gamma = 0.0000	Value = -0.7780 
+elapsed = 864.73	Round = 101	nrounds = 800.0000	eta = 0.7000	max_depth = 6.0000	gamma = 0.0000	Value = -0.7780 
+elapsed = 871.67	Round = 102	nrounds = 800.0000	eta = 0.7000	max_depth = 6.0000	gamma = 0.0000	Value = -0.7780 
+elapsed = 805.44	Round = 103	nrounds = 738.5908	eta = 0.7000	max_depth = 6.0000	gamma = 0.8357	Value = -0.7949 

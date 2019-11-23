@@ -1,0 +1,353 @@
+---
+title: "Initial"
+author: "Amit Agni"
+date: "03/05/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+
+if (!require("pacman")) install.packages("pacman")
+p_load(caret,data.table,dplyr,lubridate
+       ,here,DescTools,DataExplorer,tidyverse
+       ,googledrive,e1071,ggcorrplot,forcats
+       ,xgboost,DiagrammeR,ROCR,cutpointr
+       ,MlBayesOpt,rBayesianOptimization)
+
+options(scipen=999) #remove scientific notation in printing 
+
+
+####### parallel on windows #######
+p_load(doParallel)
+cl <- makeCluster(detectCores(), type='PSOCK')
+#registerDoParallel(1)
+registerDoParallel(cl)
+
+# turn parallel processing off and run sequentially again:
+# registerDoSEQ()
+
+#####################################
+# parallel::detectCores()
+# 
+# p_load(doMC)
+# 
+# registerDoMC(cores = 4)
+# 
+# dribble <- drive_find(pattern="train.csv")
+# drive_download(as_dribble(dribble),overwrite = TRUE)
+# 
+# dribble <- drive_find(pattern="test.csv")
+# drive_download(as_dribble(dribble),overwrite = TRUE)
+# 
+# DT_train <- fread(here::here("train.csv"))
+# DT_test <- fread(here::here("test.csv"))
+#####################################
+
+
+DT_train <- fread(here::here("100_data_raw-input","train.csv"))
+DT_test <- fread(here::here("100_data_raw-input","test.csv"))
+DT_train$flag <- "train"
+DT_test$flag <- "test"
+DT_test$amount_spent_per_room_night_scaled <- 0
+DT <- rbind(DT_train,DT_test)
+#rm(DT_train)
+#rm(DT_test)
+
+#Date fields
+vars <- c("booking_date","checkin_date","checkout_date")
+DT[,(vars) := lapply(.SD,dmy), .SDcols = vars]
+
+#Convert to factors
+vars <- c("channel_code","main_product_code","persontravellingid",
+          "resort_region_code","resort_type_code","room_type_booked_code",
+          "state_code_resort","booking_type_code")
+DT[,(vars) := lapply(.SD,as.factor), .SDcols = vars]
+
+
+
+```
+
+
+### Feat Eng
+
+```{r}
+
+#Fixing outliers
+DT[, `:=`(booking_date = if_else(booking_date > checkin_date ,checkin_date , booking_date),
+          booking_date_outlier = if_else(booking_date > checkin_date ,1 , 0))]
+
+DT[, `:=`(roomnights = ifelse(roomnights < 0, 1,roomnights),
+          roomnights_outlier = ifelse(roomnights < 0, 1,0))]
+
+
+DT[, total_pax_outlier := ifelse(total_pax != numberofadults + numberofchildren,1,0)]
+
+
+# Fixing missing values
+DT[which(complete.cases(DT)== FALSE)]
+vars <- c("season_holidayed_code","state_code_residence")
+
+prop.table(table(DT$state_code_residence))
+DT[, `:=`(state_code_residence = ifelse(is.na(state_code_residence),8,state_code_residence),
+          state_code_residence_outlier = ifelse(is.na(state_code_residence),1,0))]
+
+prop.table(table(DT$season_holidayed_code))
+DT[, `:=`(season_holidayed_code = ifelse(is.na(season_holidayed_code),2,season_holidayed_code),
+          season_holidayed_code_outlier = ifelse(is.na(season_holidayed_code),1,0))]
+
+DT[which(complete.cases(DT)== FALSE)]
+
+
+
+
+
+#MemberId
+# temp <- DT[flag == "train",
+#            .(flag,tot_bkgs_by_memberid = length(reservation_id)),
+#            by = memberid]
+
+
+# Binning
+group_category(data = DT, feature = "numberofadults", threshold = 0.001,update = TRUE)
+group_category(data = DT, feature = "numberofchildren", threshold = 0.001,update = TRUE)
+group_category(data = DT, feature = "total_pax", threshold = 0.001,update = TRUE)
+
+
+str(DT)
+#Date features
+
+vars <- c("booking_date","checkin_date")
+vars_temp <- paste0(vars,"_year")
+DT[,(vars_temp) := lapply(.SD, function(x) as.factor(year(x)))
+   , .SDcols = vars]
+
+vars_temp <- paste0(vars,"_month")
+DT[,(vars_temp) := lapply(.SD, function(x) as.factor(month(x)))
+   , .SDcols = vars]
+
+vars_temp <- paste0(vars,"_dow")
+DT[,(vars_temp) := lapply(.SD, function(x) as.factor(
+   if_else(wday(x,week_start = 1) %in% c(6,7), 'WE','WD')))
+   , .SDcols = vars]
+
+DT[,length_of_stay := as.double(checkout_date - checkin_date)]
+DT[,lead_time := as.double(checkin_date - booking_date)]
+
+DT[,no_of_rooms := ifelse(length_of_stay == 0, roomnights 
+                           , roomnights/length_of_stay )]
+
+
+
+#housekeeping
+DT$reservation_id <- NULL
+DT$memberid <- NULL
+
+vars <- names(which(lapply(DT,is.character)==TRUE))
+DT[,(vars) := lapply(.SD,as.factor), .SDcols = vars]
+
+vars <- c("booking_date","checkin_date","checkout_date")
+DT[,(vars) := NULL]
+
+vars <- c("season_holidayed_code","state_code_residence")
+DT[,(vars) := lapply(.SD,as.factor), .SDcols = vars]
+
+
+vars <- grep("outlier",names(DT),value = TRUE)
+DT[,(vars) := lapply(.SD,as.factor), .SDcols = vars]
+
+
+str(DT)
+
+
+```
+
+
+
+
+### Model Data Prep
+```{r}
+DT_bkup <- copy(DT)
+
+DT <- DT[flag == "train",]
+
+index <- createDataPartition(y=DT$amount_spent_per_room_night_scaled, p=0.8
+                             , list=FALSE) 
+my_train <- DT[index,]
+my_test <- DT[-index,]
+
+
+# Normalize training data
+# my_train <- scale(my_train) 
+
+
+my_train <- my_train[complete.cases(my_train)]
+my_test <- my_test[complete.cases(my_test)]
+
+my_train_labels <- my_train$amount_spent_per_room_night_scaled
+my_train$amount_spent_per_room_night_scaled <- NULL
+
+my_test_labels <- my_test$amount_spent_per_room_night_scaled
+my_test$amount_spent_per_room_night_scaled <- NULL
+
+dummies <- dummyVars(~., data = my_train, fullRank = TRUE)
+my_train <- predict(dummies, newdata = my_train)
+
+dummies <- dummyVars(~., data = my_test,fullRank = TRUE)
+my_test <- predict(dummies, newdata = my_test)
+
+my_train <- as.matrix(my_train, label = my_train_labels)
+my_test <- as.matrix(my_test, label = my_test_labels)
+
+
+
+
+# rm(DT)
+# rm(DT_bkup)
+# rm(DT_train)
+# rm(DT_test)
+
+### NN
+
+dim(my_train)
+
+#https://github.com/rstudio/keras/issues/693
+#tensorflow::install_tensorflow(version = "1.12")
+#keras::normalize(my_train)
+
+p_load(keras)
+rm(model)
+model <- keras_model_sequential() 
+model %>% 
+    layer_dense(units = 512, activation = 'relu', input_shape = c(196)) %>% 
+    layer_batch_normalization()%>%
+    layer_dropout(rate = 0.4) %>%
+    layer_dense(units = 512, activation = 'relu') %>%
+    layer_dense(units = 1)
+
+model %>% compile(
+     loss = 'mse',
+     optimizer = 'adam',
+     metrics = 'mse'
+ )
+
+model %>% fit(
+     my_train, 
+     my_train_labels, 
+     epochs = 32*6, 
+     batch_size = 32, 
+     validation_split = 0.3
+ )
+
+
+
+pred <- model %>% predict(my_test, batch_size = 50)
+summary(pred)
+
+
+```
+
+Best Parameters Found: 
+Round = 32	nrounds = 427.3809	eta = 0.3832	max_depth = 3.0000	gamma = 0.0000	Value = -0.9835 
+ 
+
+
+### Bayesian Optimisation
+```{r}
+opt_fn <- function(nrounds, eta, max_depth,gamma) {
+    
+    xgb_model <- xgb.train(
+        params = list(
+            booster = "gbtree"
+            ,objective = "reg:linear"
+            ,eval_metric = "rmse"
+            ,eta = eta
+            ,max_depth=max_depth
+            ,gamma = gamma)
+    ,data = my_train
+    ,watchlist = watchlist
+    ,nrounds = nrounds
+    ,early_stopping_rounds = 20
+    ,verbose = TRUE
+    ,prediction = TRUE) 
+    
+    list(
+        #Score = xgb_model$best_score
+        Score = -xgb_model$evaluation_log[xgb_model$best_iteration]$test_rmse
+        ,Pred = xgb_model$pred)
+  
+}
+
+
+opt_res <- BayesianOptimization(opt_fn
+                                ,bounds = list(
+                                    nrounds = c(50,500)
+                                    ,eta = c(0.001,1)
+                                    ,max_depth = c(3L,10L)
+                                    ,gamma = c(0,50)
+                               )
+                                ,init_grid_dt = NULL
+                                ,init_points = 10
+                                ,n_iter = 50
+                                ,acq = "ucb"
+                                ,kappa = 2.576
+                                ,eps = 0.0
+                                ,verbose = TRUE)
+
+
+ 
+
+
+```
+
+
+
+
+### Predict and Evaluate
+
+```{r}
+
+xgb_model <- xgb.train(
+    params = list(
+             booster = "gbtree"
+            ,objective = "reg:linear"
+            ,eval_metric = "rmse"
+        ,eta = 0.4
+        ,max_depth=3
+        ,gamma = 0)
+,data = my_train
+,watchlist = watchlist
+,nrounds = 430
+,early_stopping_rounds = 20
+,verbose = TRUE
+,prediction = TRUE) 
+
+
+# Learning Curve
+ggplot(melt(xgb_model$evaluation_log,id.vars = "iter")) +
+    geom_line(aes(x=iter, y=value, color=variable))
+
+importance <- xgb.importance(model = xgb_model)
+importance
+xgb.plot.importance(importance)
+
+
+pred <- predict(xgb_model,newdata = my_test)
+summary(pred)
+
+
+
+# Other XGB plots [TO BE REVIEWED]
+#xgb.plot.multi.trees(model = xgb_model)
+#xgb.plot.deepness(model=xgb_model)
+#xgb.plot.shap()
+#xgb.plot.tree(model=xgb_model)
+
+
+# Feature contributions [HOW CAN THIS BE USED]
+#pred <- predict(xgb_model,newdata = my_test ,predcontrib = TRUE)
+
+
+```
+
